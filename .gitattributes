@@ -1,0 +1,33 @@
+# Force LF line endings for all text files stored in the repository.
+# This prevents CRLF/LF diffs when contributors work on Windows.
+* text=auto eol=lf
+
+# Shell scripts must always be LF — CRLF breaks bash execution inside Linux containers.
+*.sh    text eol=lf
+*.bash  text eol=lf
+
+# Gradle / Android build files
+gradlew         text eol=lf
+*.gradle        text eol=lf
+*.kts           text eol=lf
+*.properties    text eol=lf
+*.mk            text eol=lf
+*.cmake         text eol=lf
+Makefile        text eol=lf
+
+# Docker
+Dockerfile      text eol=lf
+
+# YAML / JSON / Markdown
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.json          text eol=lf
+*.md            text eol=lf
+
+# Binary — never convert
+*.zip           binary
+*.apk           binary
+*.so            binary
+*.a             binary
+*.jar           binary
+*.aar           binary

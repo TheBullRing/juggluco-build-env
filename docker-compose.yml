@@ -1,0 +1,73 @@
+# docker-compose.yml
+#
+# Two profiles — pick one:
+#
+#   1. Clone mode (default):
+#        docker compose up -d
+#      Sources are baked into the image at build time.
+#      Connect via SSH: ssh -p 2222 juggluco@localhost  (password: juggluco)
+#
+#   2. Volume mode (edit on host, build in container):
+#      Set HOST_SRC to the absolute path of your local Juggluco clone, then:
+#
+#        # PowerShell (Windows):
+#        $env:HOST_SRC = "C:\Users\you\Juggluco"
+#        docker compose --profile volume up -d
+#
+#        # bash (Mac / Linux):
+#        HOST_SRC=$HOME/Juggluco docker compose --profile volume up -d
+#
+#      Connect via SSH: ssh -p 2222 juggluco@localhost
+#      Then build:      cd /workspace/Juggluco && ./gradlew assembleRelease
+#
+# Notes for Windows users:
+#   - Files mounted from Windows appear as uid 0 inside the container.
+#     The `juggluco` user has passwordless sudo, so prefix gradle with sudo:
+#       sudo ./gradlew assembleMobileLibre3SiDexGoogleRelease
+#   - CRLF line endings and gradlew execute bits are fixed automatically
+#     by the entrypoint every time the container starts.
+
+services:
+
+  # ── clone mode (sources baked into image) ─────────────────────────────────
+  juggluco-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: juggluco-build-env:latest
+    container_name: juggluco-dev
+    ports:
+      - "2222:22"
+    working_dir: /workspace/Juggluco
+    environment:
+      ANDROID_HOME: /opt/android-sdk
+      ANDROID_SDK_ROOT: /opt/android-sdk
+      GRADLE_USER_HOME: /home/juggluco/.gradle
+      MODE: clone
+    tty: true
+    stdin_open: true
+
+  # ── volume mode (live host folder) ────────────────────────────────────────
+  juggluco-dev-volume:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: juggluco-build-env:latest
+    profiles:
+      - volume
+    container_name: juggluco-dev-volume
+    ports:
+      - "2222:22"
+    working_dir: /workspace/Juggluco
+    volumes:
+      # HOST_SRC must be set to the absolute path of your local Juggluco clone.
+      # Example (PowerShell):  $env:HOST_SRC = "C:\Users\you\Juggluco"
+      # Example (bash):        export HOST_SRC=$HOME/Juggluco
+      - "${HOST_SRC:?Set HOST_SRC to your local Juggluco clone path}:/workspace/Juggluco"
+    environment:
+      ANDROID_HOME: /opt/android-sdk
+      ANDROID_SDK_ROOT: /opt/android-sdk
+      GRADLE_USER_HOME: /home/juggluco/.gradle
+      MODE: volume
+    tty: true
+    stdin_open: true

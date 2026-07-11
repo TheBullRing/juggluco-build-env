@@ -1,0 +1,46 @@
+{
+  // VS Code Dev Containers configuration for Juggluco development.
+  // Requires the "Dev Containers" extension (ms-vscode-remote.remote-containers).
+  //
+  // Usage:
+  //   1. Start the volume-mode container:
+  //        HOST_SRC=$PWD docker compose --profile volume up -d
+  //   2. In VS Code: Ctrl+Shift+P → "Dev Containers: Attach to Running Container"
+  //      and select "juggluco-dev-volume".
+  //
+  //   OR open this folder in VS Code and click "Reopen in Container" when prompted.
+
+  "name": "Juggluco Dev",
+
+  // Attach to the already-running volume-mode container rather than launching a new one.
+  "service": "juggluco-dev-volume",
+  "dockerComposeFile": "docker-compose.yml",
+  "workspaceFolder": "/workspace/Juggluco",
+
+  // Extensions automatically installed inside the container.
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "fwcd.kotlin",
+        "vscjava.vscode-java-pack",
+        "vscjava.vscode-gradle",
+        "ms-vscode.cpptools",
+        "ms-vscode.cmake-tools",
+        "eamodio.gitlens",
+        "usernamehw.errorlens"
+      ],
+      "settings": {
+        "java.home": "/usr/lib/jvm/java-21-openjdk-amd64",
+        "android.sdk.root": "/opt/android-sdk",
+        "cmake.cmakePath": "/opt/android-sdk/cmake/4.1.2/bin/cmake",
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  },
+
+  // Port forwarded so the SSH daemon is still reachable if you switch workflows.
+  "forwardPorts": [22],
+
+  // The container already has all tools; no postCreate setup needed.
+  "postCreateCommand": ""
+}
