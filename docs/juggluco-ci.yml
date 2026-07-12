@@ -43,35 +43,13 @@ jobs:
           repository: TheBullRing/juggluco-build-env
           path: juggluco-build-env
 
-      # ── 3. Set up Docker Buildx ─────────────────────────────────────────────
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # ── 4. Cache Docker image layers ────────────────────────────────────────
-      - name: Cache Docker layers
-        uses: actions/cache@v4
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ hashFiles('juggluco-build-env/Dockerfile') }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-
-
-      # ── 5. Build the Docker image ────────────────────────────────────────────
-      - name: Build Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: juggluco-build-env
-          file: juggluco-build-env/Dockerfile
-          tags: juggluco-build-env:ci
-          load: true
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
-
-      # Prevent cache from growing unboundedly (move trick)
-      - name: Rotate build cache
+      # ── 3. Pull the pre-built image from GHCR ───────────────────────────────
+      # The image is built and published by juggluco-build-env's publish.yml
+      # workflow on every push to master. Pulling is ~2 min vs ~15 min to build.
+      - name: Pull juggluco-build-env image
         run: |
-          rm -rf /tmp/.buildx-cache
-          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+          docker pull ghcr.io/thebullring/juggluco-build-env:latest
+          docker tag  ghcr.io/thebullring/juggluco-build-env:latest juggluco-build-env:ci
 
       # ── 6. Prepare artifact output directory ────────────────────────────────
       - name: Prepare artifact output directory
