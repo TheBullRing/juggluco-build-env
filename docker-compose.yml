@@ -29,12 +29,14 @@
 
 services:
 
-  # ── clone mode (sources baked into image) ─────────────────────────────────
+  # ── clone mode (clones Juggluco on first start) ───────────────────────────
   juggluco-dev:
     build:
       context: .
       dockerfile: Dockerfile
     image: juggluco-build-env:latest
+    profiles:
+      - "!volume"   # only starts with plain `docker compose up`; excluded by --profile volume
     container_name: juggluco-dev
     ports:
       - "2222:22"

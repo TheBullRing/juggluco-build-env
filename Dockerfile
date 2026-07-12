@@ -117,8 +117,8 @@ COPY --from=sdk --chown=juggluco:juggluco /opt/android-sdk /opt/android-sdk
 # These assets are stored outside /workspace/Juggluco so they survive a volume
 # bind-mount shadowing that directory. entrypoint.sh injects them after cloning
 # or mounting.
+RUN mkdir -p /workspace/Juggluco && chown -R juggluco:juggluco /workspace
 USER juggluco
-RUN mkdir -p /workspace/Juggluco
 
 COPY --chown=juggluco:juggluco jniLibs.zip     /workspace/jniLibs.zip
 COPY --chown=juggluco:juggluco patches/        /workspace/patches-baked/
