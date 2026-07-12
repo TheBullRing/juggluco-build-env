@@ -28,11 +28,20 @@ JUGGLUCO_REPO="https://github.com/j-kaltes/Juggluco.git"
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+# Write local.properties pointing at the in-container SDK.
+# $1 = "force"  → always overwrite (clone mode: upstream ships wrong paths)
+# $1 = ""       → only write when missing or still has upstream hardcoded path
 ensure_local_properties() {
-    if [ ! -f "$WORKSPACE/local.properties" ]; then
+    local PROPS="$WORKSPACE/local.properties"
+    local FORCE="${1:-}"
+    if [ "$FORCE" = "force" ] \
+       || [ ! -f "$PROPS" ] \
+       || grep -q "/home/jka" "$PROPS"; then
         printf "sdk.dir=/opt/android-sdk\ncmake.dir=/opt/android-sdk/cmake/4.1.2\n" \
-            > "$WORKSPACE/local.properties"
-        echo "[entrypoint] Created local.properties"
+            > "$PROPS"
+        echo "[entrypoint] Wrote local.properties"
+    else
+        echo "[entrypoint] local.properties already configured — skipping."
     fi
 }
 
@@ -150,7 +159,7 @@ if [ -z "$(ls -A "$WORKSPACE" 2>/dev/null)" ]; then
 
     inject_jni_libs
     inject_patches
-    ensure_local_properties
+    ensure_local_properties force
 
 else
     # ── Volume mode: workspace is populated by the host bind-mount ───────────
