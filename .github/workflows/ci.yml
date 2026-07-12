@@ -9,6 +9,7 @@ name: Docker image build check
 on:
   pull_request:
     branches: ["**"]
+  workflow_dispatch:
 
 # Cancel any in-progress run on the same PR to save runner minutes.
 concurrency:
