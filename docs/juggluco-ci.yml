@@ -65,7 +65,13 @@ jobs:
           cp -r "${{ github.workspace }}/juggluco-build-env/patches/." \
                 "${{ github.workspace }}/Juggluco/"
 
-      # ── 8. Run prerequisite validation inside the container ─────────────────
+      # ── 8. Validate prerequisites and build APK inside the container ─────────
+      # local.properties is overwritten inside the container before any Gradle
+      # invocation — this is the only reliable way to prevent AGP from reading
+      # the hardcoded /home/jka paths that j-kaltes commits upstream.
+      # cmake.dir is intentionally omitted: AGP resolves cmake from ANDROID_HOME
+      # using the version declared in Common/build.gradle (def CMAKEVERSION).
+      # Providing cmake.dir overrides that lookup and causes CXX1301.
       - name: Validate prerequisites
         run: |
           docker run --rm \
@@ -73,10 +79,12 @@ jobs:
             -e WORKSPACE=/workspace/Juggluco \
             -v "${{ github.workspace }}/Juggluco:/workspace/Juggluco" \
             -v "${{ github.workspace }}/juggluco-build-env:/workspace/juggluco-build-env" \
-            --user juggluco \
             --entrypoint /bin/bash \
             juggluco-build-env:ci \
-            -c "bash /workspace/juggluco-build-env/scripts/validate.sh"
+            -c "
+              printf 'sdk.dir=/opt/android-sdk\n' > /workspace/Juggluco/local.properties
+              bash /workspace/juggluco-build-env/scripts/validate.sh
+            "
 
       # ── 9. Build APK inside the container ───────────────────────────────────
       - name: Build Juggluco APK
@@ -90,15 +98,16 @@ jobs:
             -v "${{ github.workspace }}/Juggluco:/workspace/Juggluco" \
             -v "${{ github.workspace }}/juggluco-build-env:/workspace/juggluco-build-env" \
             -v "${{ github.workspace }}/ci-artifacts:/tmp/artifacts" \
-            --user juggluco \
             --entrypoint /bin/bash \
             juggluco-build-env:ci \
             -c "
               set -e
+              printf 'sdk.dir=/opt/android-sdk\n' > /workspace/Juggluco/local.properties
+              git config --global --add safe.directory /workspace/Juggluco
               bash /workspace/juggluco-build-env/scripts/build.sh MobileLibre3SiDexNogoogleRelease
             "
 
-      # ── 10. Upload APK ───────────────────────────────────────────────────────
+      # ── 11. Upload APK ───────────────────────────────────────────────────────
       - name: Upload APK artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -108,7 +117,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      # ── 11. Upload build log ─────────────────────────────────────────────────
+      # ── 12. Upload build log ─────────────────────────────────────────────────
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
