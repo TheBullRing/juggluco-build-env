@@ -82,6 +82,9 @@ inject_jni_libs() {
 # Inject patch files that are required to build but are not (yet) in upstream
 # j-kaltes/Juggluco. Only used in clone mode; volume-mode contributors apply
 # patches manually (see README).
+#
+# Patches always overwrite the destination — they replace upstream files with
+# corrected versions, so "already present" means the wrong content is there.
 inject_patches() {
     local BAKED="/workspace/patches-baked"
 
@@ -93,13 +96,9 @@ inject_patches() {
     find "$BAKED" -type f | while IFS= read -r src; do
         local rel="${src#$BAKED/}"
         local dst="$WORKSPACE/$rel"
-        if [ ! -f "$dst" ]; then
-            mkdir -p "$(dirname "$dst")"
-            cp "$src" "$dst"
-            echo "[entrypoint] Injected patch: $rel"
-        else
-            echo "[entrypoint] Patch already present, skipping: $rel"
-        fi
+        mkdir -p "$(dirname "$dst")"
+        cp "$src" "$dst"
+        echo "[entrypoint] Applied patch: $rel"
     done
 }
 
