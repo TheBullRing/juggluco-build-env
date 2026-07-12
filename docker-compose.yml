@@ -43,7 +43,6 @@ services:
       ANDROID_HOME: /opt/android-sdk
       ANDROID_SDK_ROOT: /opt/android-sdk
       GRADLE_USER_HOME: /home/juggluco/.gradle
-      MODE: clone
     tty: true
     stdin_open: true
 
@@ -63,11 +62,14 @@ services:
       # HOST_SRC must be set to the absolute path of your local Juggluco clone.
       # Example (PowerShell):  $env:HOST_SRC = "C:\Users\you\Juggluco"
       # Example (bash):        export HOST_SRC=$HOME/Juggluco
-      - "${HOST_SRC:?Set HOST_SRC to your local Juggluco clone path}:/workspace/Juggluco"
+      #
+      # The default below is a placeholder so `docker compose build` (no profile)
+      # does not fail on variable interpolation. It has no effect unless you start
+      # the container with --profile volume AND HOST_SRC is unset.
+      - "${HOST_SRC:-/tmp/juggluco-src-not-mounted}:/workspace/Juggluco"
     environment:
       ANDROID_HOME: /opt/android-sdk
       ANDROID_SDK_ROOT: /opt/android-sdk
       GRADLE_USER_HOME: /home/juggluco/.gradle
-      MODE: volume
     tty: true
     stdin_open: true

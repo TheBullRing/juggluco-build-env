@@ -1,0 +1,141 @@
+# =============================================================================
+# FILE:   .github/workflows/ci.yml
+# REPO:   j-kaltes/Juggluco
+#
+# Place this file at .github/workflows/ci.yml inside the Juggluco source repo.
+# Do NOT put it in juggluco-build-env — that repo only owns the Docker image.
+#
+# What this workflow does:
+#   1. On every PR to any branch, checks out Juggluco source.
+#   2. Builds (or pulls) the juggluco-build-env Docker image.
+#   3. Runs the APK build inside the container.
+#   4. Uploads the APK and build log as artifacts.
+# =============================================================================
+
+name: Juggluco CI
+
+on:
+  pull_request:
+    branches: ["**"]
+
+# Cancel any in-progress run on the same PR to save runner minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      # ── 1. Check out the Juggluco source ────────────────────────────────────
+      - name: Checkout Juggluco
+        uses: actions/checkout@v4
+        with:
+          path: Juggluco
+
+      # ── 2. Check out the build environment ──────────────────────────────────
+      - name: Checkout juggluco-build-env
+        uses: actions/checkout@v4
+        with:
+          repository: TheBullRing/juggluco-build-env
+          path: juggluco-build-env
+
+      # ── 3. Set up Docker Buildx ─────────────────────────────────────────────
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ── 4. Cache Docker image layers ────────────────────────────────────────
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ hashFiles('juggluco-build-env/Dockerfile') }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      # ── 5. Build the Docker image ────────────────────────────────────────────
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: juggluco-build-env
+          file: juggluco-build-env/Dockerfile
+          tags: juggluco-build-env:ci
+          load: true
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+
+      # Prevent cache from growing unboundedly (move trick)
+      - name: Rotate build cache
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+      # ── 6. Prepare artifact output directory ────────────────────────────────
+      - name: Prepare artifact output directory
+        run: mkdir -p "${{ github.workspace }}/ci-artifacts"
+
+      # ── 7. Apply required patches to the Juggluco checkout ──────────────────
+      # These files are not yet in j-kaltes/Juggluco but are required to compile.
+      # The patches are stored in juggluco-build-env/patches/ and must be copied
+      # into the Juggluco source tree before validate or build can run.
+      # (entrypoint.sh is bypassed in CI — patches must be applied explicitly.)
+      - name: Apply patches
+        run: |
+          cp -r "${{ github.workspace }}/juggluco-build-env/patches/." \
+                "${{ github.workspace }}/Juggluco/"
+
+      # ── 8. Run prerequisite validation inside the container ─────────────────
+      - name: Validate prerequisites
+        run: |
+          docker run --rm \
+            -e ANDROID_HOME=/opt/android-sdk \
+            -e WORKSPACE=/workspace/Juggluco \
+            -v "${{ github.workspace }}/Juggluco:/workspace/Juggluco" \
+            -v "${{ github.workspace }}/juggluco-build-env:/workspace/juggluco-build-env" \
+            --user juggluco \
+            --entrypoint /bin/bash \
+            juggluco-build-env:ci \
+            -c "bash /workspace/juggluco-build-env/scripts/validate.sh"
+
+      # ── 9. Build APK inside the container ───────────────────────────────────
+      - name: Build Juggluco APK
+        run: |
+          docker run --rm \
+            -e ANDROID_HOME=/opt/android-sdk \
+            -e ANDROID_SDK_ROOT=/opt/android-sdk \
+            -e GRADLE_USER_HOME=/home/juggluco/.gradle \
+            -e WORKSPACE=/workspace/Juggluco \
+            -e ARTIFACTS_DIR=/tmp/artifacts \
+            -v "${{ github.workspace }}/Juggluco:/workspace/Juggluco" \
+            -v "${{ github.workspace }}/juggluco-build-env:/workspace/juggluco-build-env" \
+            -v "${{ github.workspace }}/ci-artifacts:/tmp/artifacts" \
+            --user juggluco \
+            --entrypoint /bin/bash \
+            juggluco-build-env:ci \
+            -c "
+              set -e
+              bash /workspace/juggluco-build-env/scripts/build.sh MobileLibre3SiDexNogoogleRelease
+            "
+
+      # ── 10. Upload APK ───────────────────────────────────────────────────────
+      - name: Upload APK artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: juggluco-apk-${{ github.run_number }}
+          path: ci-artifacts/*.apk
+          if-no-files-found: warn
+          retention-days: 14
+
+      # ── 11. Upload build log ─────────────────────────────────────────────────
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ github.run_number }}
+          path: ci-artifacts/build.log
+          if-no-files-found: warn
+          retention-days: 14

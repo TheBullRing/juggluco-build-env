@@ -17,12 +17,21 @@ juggluco-build-env/
 ├── docker-compose.yml          # Service profiles (clone + volume)
 ├── entrypoint.sh               # Container startup script
 ├── jniLibs.zip                 # Pre-built native libraries
+├── patches/                    # Files required to compile but not yet in upstream Juggluco
+│   └── Common/
+│       ├── build.gradle
+│       └── src/main/cpp/
+│           ├── include/twilio.hpp
+│           └── net/ICE/jugglucoconnect.h
 ├── scripts/
 │   ├── build.sh                # Builds an APK variant; collects artifacts
 │   └── validate.sh             # Checks all prerequisites before building
+├── docs/
+│   ├── github-actions.md       # CI architecture and setup guide
+│   └── juggluco-ci.yml         # Workflow to copy into j-kaltes/Juggluco
 ├── .github/
 │   └── workflows/
-│       └── ci.yml              # GitHub Actions CI (PR + push)
+│       └── ci.yml              # Verifies the Docker image builds on every PR
 ├── .devcontainer/
 │   └── devcontainer.json       # VS Code Dev Containers config
 └── README.md                   # This file
@@ -44,15 +53,15 @@ juggluco-build-env/
 
 ### Mode 1 — Clone (self-contained)
 
-The image bakes a full `git clone` of Juggluco at **image build time**. The container
-is entirely self-contained — no host files are needed.
+The container clones Juggluco from GitHub **on first start** — not at image build time.
+This keeps the image smaller and means you always get the latest Juggluco commit.
+The container is self-contained — no host files are needed.
+
+**First start** takes ~30 seconds extra for the clone. Subsequent starts are instant.
 
 **When to use:**
 - You want to build the project and get an APK without any local checkout.
 - You do not need to edit sources between builds.
-- CI / GitHub Actions.
-
-**Limitation:** Source changes require rebuilding the image (`docker compose build`).
 
 ---
 
@@ -74,12 +83,41 @@ container compiles them. Changes are visible instantly — no image rebuild need
 | **Mac** (Docker Desktop / VirtioFS) | Same as Windows — files appear as `uid 0`. |
 | **Linux** | Files appear with the actual host uid. The entrypoint remaps `juggluco` to match automatically. |
 
-The entrypoint script runs at every container start and automatically:
+The entrypoint script detects the mode automatically by checking whether
+`/workspace/Juggluco` is empty or populated — no `MODE` env var is needed.
+
+In **volume mode** it automatically:
 - Injects pre-built jniLibs from the baked image copy (if not already present).
 - Restores **git symlinks** that Windows git checked out as plain text files.
 - Converts **CRLF line endings** to LF on shell/Gradle/CMake scripts.
 - Makes `gradlew` executable.
 - Creates `local.properties` pointing at the SDK if it does not already exist.
+
+> ⚠️ **Required patches for volume mode**
+>
+> The upstream Juggluco repository (`j-kaltes/Juggluco`) is currently missing
+> several files that are required to compile. In **clone mode** and **CI** these
+> are injected automatically from the `patches/` folder in this repo. In
+> **volume mode** your local clone is mounted directly, so you must apply them
+> manually before building:
+>
+> | File to copy from `patches/` | Destination in your Juggluco clone |
+> |---|---|
+> | `patches/Common/build.gradle` | `Common/build.gradle` |
+> | `patches/Common/src/main/cpp/include/twilio.hpp` | `Common/src/main/cpp/include/twilio.hpp` |
+> | `patches/Common/src/main/cpp/net/ICE/jugglucoconnect.h` | `Common/src/main/cpp/net/ICE/jugglucoconnect.h` |
+>
+> Quick copy command (run from the `juggluco-build-env` root):
+> ```bash
+> # bash (Mac / Linux):
+> cp -r patches/. $HOME/path/to/Juggluco/
+>
+> # PowerShell (Windows):
+> Copy-Item -Recurse patches\* C:\path\to\Juggluco\
+> ```
+>
+> Once these files are merged into the upstream repo this step will no longer
+> be necessary.
 
 ---
 
@@ -92,8 +130,9 @@ All commands below are run from the **repository root**
 
 ### Step 1 — Build the Docker image (one-time, ~10–20 min)
 
-Downloads Android SDK, NDK, CMake, Java 21, and clones the full Juggluco repository
-inside the image. The resulting image is approximately 6 GB.
+Downloads and installs the Android SDK, NDK, CMake, and Java 21.
+The Juggluco source is **not** included in the image — it is cloned on first start.
+The resulting image is approximately 1.3 GB (content size).
 
 ```bash
 docker compose build
@@ -107,8 +146,9 @@ Wait for this to complete before proceeding.
 
 | | Clone mode | Volume mode |
 |---|---|---|
-| **Sources** | Baked into the image | Mounted live from host |
-| **Edit files on host?** | No — rebuild image for changes | Yes — instantly visible |
+| **Sources** | Cloned from GitHub on first start | Mounted live from host |
+| **Edit files on host?** | No — `docker compose down` + `up` to get new sources | Yes — instantly visible |
+| **First start** | ~30 s extra for the clone | Instant |
 | **Best for** | Just getting an APK / CI | Active development |
 | **VS Code Dev Containers** | Attach manually | One-click via `.devcontainer/` ✓ |
 
@@ -144,7 +184,7 @@ docker ps
 # Expect: juggluco-dev (clone) or juggluco-dev-volume (volume)
 ```
 
-Watch the entrypoint output (useful on first start):
+Watch the entrypoint output — especially useful on first clone-mode start:
 
 ```bash
 docker logs -f juggluco-dev
@@ -152,7 +192,8 @@ docker logs -f juggluco-dev
 docker logs -f juggluco-dev-volume
 ```
 
-Wait until you see `Starting sshd...` before connecting.
+In clone mode you will see the git clone progress before `Starting sshd...`.
+Wait until `Starting sshd...` appears before connecting.
 
 ---
 
@@ -263,24 +304,24 @@ On build failure the last 40 lines of the log are printed to stderr for quick tr
 
 ## CI / GitHub Actions
 
-The workflow in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every
-**pull request** and on every **push** to `main`/`master`.
+This repo uses a **two-repo CI architecture**:
 
-**What it does:**
-1. Checks out this repository.
-2. Builds the Docker image (with layer cache to avoid redundant re-downloads).
-3. Validates prerequisites inside the container.
-4. Builds `MobileLibre3SiDexNogoogleRelease` inside the container.
-5. Uploads the APK as a downloadable artifact (retained 14 days).
-6. Uploads the full build log as a downloadable artifact (retained 14 days).
+| Repo | Workflow | Trigger | Purpose |
+|---|---|---|---|
+| `TheBullRing/juggluco-build-env` | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | PR to this repo | Verifies the Dockerfile builds cleanly |
+| `j-kaltes/Juggluco` | [`docs/juggluco-ci.yml`](docs/juggluco-ci.yml) | PR to Juggluco | Compiles the APK using this image |
 
-**To enable CI** for your fork: update the badge URL at the top of this README with
-your GitHub organisation/user name.
+**To set up APK CI in `j-kaltes/Juggluco`:**
+copy [`docs/juggluco-ci.yml`](docs/juggluco-ci.yml) to `.github/workflows/ci.yml`
+inside the Juggluco repository. The workflow:
+1. Checks out both repos side by side.
+2. Builds the Docker image (layer-cached).
+3. Applies the required patches from `juggluco-build-env/patches/`.
+4. Validates prerequisites inside the container.
+5. Builds `MobileLibre3SiDexNogoogleRelease` inside the container.
+6. Uploads the APK and build log as artifacts (retained 14 days).
 
-For the complete step-by-step guide — enabling the workflow, reading results,
-downloading artifacts, adding the status badge, customising variants, persisting
-the Gradle cache, and troubleshooting — see
-**[docs/github-actions.md](docs/github-actions.md)**.
+For the full architecture guide see **[docs/github-actions.md](docs/github-actions.md)**.
 
 ---
 

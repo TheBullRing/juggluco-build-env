@@ -1,28 +1,30 @@
 #!/bin/bash
 # entrypoint.sh
 #
-# Handles two operating modes, selected by the MODE env var:
+# Single entry point for all three use cases:
 #
-#   MODE=clone  (default)
-#       Sources were baked into the image via `git clone` at build time.
-#       Nothing to do — just start sshd.
+#   1. Clone mode (default, no volume mount)
+#        /workspace/Juggluco is empty on first start.
+#        This script clones Juggluco, injects jniLibs + patches, writes
+#        local.properties, then starts sshd.
+#        On subsequent starts the directory is already populated — setup is
+#        skipped and sshd starts immediately.
 #
-#   MODE=volume
-#       The project folder is bind-mounted from the host (Windows/Mac/Linux).
-#       On Windows/Mac (Docker Desktop) files appear owned by uid 0.
-#       On Linux hosts they appear owned by the host user's uid (typically 1000).
-#       This script detects the actual uid of the mounted files and re-maps the
-#       `juggluco` user to that uid so it can read/write the mount freely.
-#       It also:
-#         - Injects jniLibs if not already present (extracted from the baked copy)
-#         - Fixes CRLF line endings and marks gradlew executable
-#         - Restores git symlinks that Windows git checked out as plain text files
-#         - Writes local.properties if it does not exist
+#   2. Volume mode (host directory bind-mounted)
+#        /workspace/Juggluco is populated by the mount before this script runs.
+#        This script injects jniLibs, fixes uid/CRLF/symlinks, writes
+#        local.properties, then starts sshd.
+#        NOTE: patch files must be applied manually by the contributor.
+#        See README for the list of required patches.
+#
+#   3. CI mode (j-kaltes/Juggluco workflow)
+#        entrypoint.sh is not called — the CI workflow uses --entrypoint /bin/bash
+#        and applies patches explicitly before running build.sh.
 #
 set -e
 
 WORKSPACE=/workspace/Juggluco
-MODE="${MODE:-clone}"
+JUGGLUCO_REPO="https://github.com/j-kaltes/Juggluco.git"
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -34,33 +36,71 @@ ensure_local_properties() {
     fi
 }
 
-# In volume mode the host bind-mount shadows /workspace/Juggluco entirely, so
-# the jniLibs that were extracted there at image build time are gone.
-# The Dockerfile preserves a copy at /workspace/jniLibs-baked/ (outside the
-# mount point).  Copy them into the appropriate location inside the mount so
-# the build can find them.
+# Extract jniLibs from the baked zip into the workspace, then keep a copy
+# outside the Juggluco tree so volume-mode re-mounts can get them too.
 inject_jni_libs() {
     local BAKED_ROOT="/workspace/jniLibs-baked"
-    # Try the most common extraction layout first; fall back to a flat jniLibs dir.
-    local SRC=""
-    if [ -d "$BAKED_ROOT/Common/src/main/jniLibs" ]; then
-        SRC="$BAKED_ROOT/Common/src/main/jniLibs"
-        local TARGET_JNI="$WORKSPACE/Common/src/main/jniLibs"
-    elif [ -d "$BAKED_ROOT/jniLibs" ]; then
-        SRC="$BAKED_ROOT/jniLibs"
-        local TARGET_JNI="$WORKSPACE/jniLibs"
+
+    # Build the baked copy the first time (zip lives at /workspace/jniLibs.zip).
+    if [ ! -d "$BAKED_ROOT" ] && [ -f "/workspace/jniLibs.zip" ]; then
+        echo "[entrypoint] Extracting jniLibs from zip..."
+        local TMP
+        TMP=$(mktemp -d)
+        unzip -q /workspace/jniLibs.zip -d "$TMP"
+        if [ -d "$TMP/Common/src/main/jniLibs" ]; then
+            mkdir -p "$BAKED_ROOT/Common/src/main"
+            cp -r "$TMP/Common/src/main/jniLibs" "$BAKED_ROOT/Common/src/main/"
+        elif [ -d "$TMP/jniLibs" ]; then
+            cp -r "$TMP/jniLibs" "$BAKED_ROOT/"
+        fi
+        rm -rf "$TMP"
+        echo "[entrypoint] jniLibs baked copy ready at $BAKED_ROOT"
     fi
 
-    if [ -n "$SRC" ] && [ ! -d "$TARGET_JNI" ]; then
-        echo "[entrypoint] Injecting jniLibs from baked image copy ($SRC)..."
-        mkdir -p "$(dirname "$TARGET_JNI")"
-        cp -r "$SRC" "$TARGET_JNI"
+    # Inject into the workspace.
+    local SRC DST
+    if [ -d "$BAKED_ROOT/Common/src/main/jniLibs" ]; then
+        SRC="$BAKED_ROOT/Common/src/main/jniLibs"
+        DST="$WORKSPACE/Common/src/main/jniLibs"
+    elif [ -d "$BAKED_ROOT/jniLibs" ]; then
+        SRC="$BAKED_ROOT/jniLibs"
+        DST="$WORKSPACE/jniLibs"
+    fi
+
+    if [ -n "$SRC" ] && [ ! -d "$DST" ]; then
+        echo "[entrypoint] Injecting jniLibs ($SRC → $DST)..."
+        mkdir -p "$(dirname "$DST")"
+        cp -r "$SRC" "$DST"
         echo "[entrypoint] jniLibs injected."
     elif [ -z "$SRC" ]; then
-        echo "[entrypoint] WARNING: /workspace/jniLibs-baked/ not found — jniLibs not injected."
+        echo "[entrypoint] WARNING: jniLibs source not found — skipping injection."
     else
-        echo "[entrypoint] jniLibs already present at $TARGET_JNI — skipping injection."
+        echo "[entrypoint] jniLibs already present — skipping."
     fi
+}
+
+# Inject patch files that are required to build but are not (yet) in upstream
+# j-kaltes/Juggluco. Only used in clone mode; volume-mode contributors apply
+# patches manually (see README).
+inject_patches() {
+    local BAKED="/workspace/patches-baked"
+
+    if [ ! -d "$BAKED" ]; then
+        echo "[entrypoint] WARNING: $BAKED not found — patches not injected."
+        return
+    fi
+
+    find "$BAKED" -type f | while IFS= read -r src; do
+        local rel="${src#$BAKED/}"
+        local dst="$WORKSPACE/$rel"
+        if [ ! -f "$dst" ]; then
+            mkdir -p "$(dirname "$dst")"
+            cp "$src" "$dst"
+            echo "[entrypoint] Injected patch: $rel"
+        else
+            echo "[entrypoint] Patch already present, skipping: $rel"
+        fi
+    done
 }
 
 fix_text_files() {
@@ -82,48 +122,40 @@ fix_text_files() {
 }
 
 # Restore git symlinks that Windows checked out as plain text files.
-# Git stores symlinks with mode 120000; on Windows without core.symlinks=true
-# they become regular files whose content is the link target path.
-# Inside the Linux container we can recreate them properly.
 restore_symlinks() {
     echo "[entrypoint] Restoring git symlinks..."
     cd "$WORKSPACE"
-
-    # Tell git that symlinks are supported in this environment
     git config core.symlinks true
-
-    # List every blob git tracks as a symlink (mode 120000), then for each one:
-    #   - read the target path (the file's text content)
-    #   - replace the plain-text stub with a real symlink
     git ls-files -s | awk '/^120000/ {print $4}' | while IFS= read -r path; do
         target=$(cat "$path" 2>/dev/null) || continue
-        # Only act if the current entry is a plain file (not already a symlink)
         if [ -f "$path" ] && [ ! -L "$path" ]; then
             echo "[entrypoint]   $path -> $target"
             rm -f "$path"
             ln -s "$target" "$path"
         fi
     done
-
     echo "[entrypoint] Symlink restore done."
 }
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
-case "$MODE" in
+# Determine whether the workspace already has Juggluco source.
+# An empty directory (just mkdir'd by the Dockerfile) has no files.
+if [ -z "$(ls -A "$WORKSPACE" 2>/dev/null)" ]; then
+    # ── Clone mode: workspace is empty, clone Juggluco now ──────────────────
+    echo "[entrypoint] /workspace/Juggluco is empty — cloning Juggluco..."
+    # Run clone as juggluco so files are owned correctly.
+    su -c "git clone --depth=1 --recurse-submodules --shallow-submodules \
+        $JUGGLUCO_REPO $WORKSPACE" juggluco
+    echo "[entrypoint] Clone complete."
 
-  clone)
-    echo "[entrypoint] Mode: clone — using sources baked into the image."
+    inject_jni_libs
+    inject_patches
     ensure_local_properties
-    ;;
 
-  volume)
-    echo "[entrypoint] Mode: volume — bind-mount at $WORKSPACE"
-
-    if [ ! -d "$WORKSPACE" ]; then
-        echo "[entrypoint] ERROR: $WORKSPACE not found. Did you forget to set HOST_SRC?"
-        exit 1
-    fi
+else
+    # ── Volume mode: workspace is populated by the host bind-mount ───────────
+    echo "[entrypoint] /workspace/Juggluco is populated — using mounted sources."
 
     # Detect the uid that owns the mounted files.
     # Docker Desktop (Windows & Mac) presents them as uid 0.
@@ -136,16 +168,11 @@ case "$MODE" in
     JUGGLUCO_GID=$(id -g juggluco)
 
     if [ "$MOUNT_UID" = "0" ]; then
-        # Docker Desktop (Windows / Mac): files appear as root.
-        # juggluco already has passwordless sudo, so it can write them.
-        echo "[entrypoint] Docker Desktop mode detected (uid 0 mount)."
-        echo "[entrypoint] juggluco can use 'sudo' to write to the mount."
+        echo "[entrypoint] Docker Desktop mode (uid 0 mount) — use sudo for writes."
     elif [ "$MOUNT_UID" != "$JUGGLUCO_UID" ]; then
-        # Linux host with a different uid: re-map juggluco to match.
         echo "[entrypoint] Remapping juggluco uid $JUGGLUCO_UID → $MOUNT_UID"
         usermod -u "$MOUNT_UID" juggluco
         groupmod -g "$MOUNT_GID" juggluco 2>/dev/null || true
-        # Fix ownership of juggluco's home and the SDK (baked in as old uid)
         find /home/juggluco /opt/android-sdk -xdev \
             \( -uid "$JUGGLUCO_UID" -o -gid "$JUGGLUCO_GID" \) \
             -exec chown "$MOUNT_UID:$MOUNT_GID" {} \; 2>/dev/null || true
@@ -157,13 +184,7 @@ case "$MODE" in
     restore_symlinks
     fix_text_files
     ensure_local_properties
-    ;;
-
-  *)
-    echo "[entrypoint] Unknown MODE='$MODE'. Valid values: clone | volume"
-    exit 1
-    ;;
-esac
+fi
 
 echo "[entrypoint] Starting sshd..."
 exec /usr/sbin/sshd -D -e
